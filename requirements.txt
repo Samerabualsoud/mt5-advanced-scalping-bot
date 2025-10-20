@@ -1,0 +1,4 @@
+MetaTrader5>=5.0.45
+pandas>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.2.0
