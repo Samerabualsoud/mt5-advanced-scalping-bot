@@ -186,43 +186,54 @@ class AdvancedScalpingEngine:
             confidence: 0-100
             details: Analysis details
         """
-        # Get M5 data (primary timeframe)
-        rates_m5 = mt5.copy_rates_from_pos(symbol, timeframe, 0, 200)
-        if rates_m5 is None or len(rates_m5) < 100:
-            return None, 0, {}
-        
-        df_m5 = pd.DataFrame(rates_m5)
-        df_m5['time'] = pd.to_datetime(df_m5['time'], unit='s')
-        
-        # Get H1 data (higher timeframe for trend confirmation)
-        rates_h1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 100)
-        if rates_h1 is None or len(rates_h1) < 50:
-            return None, 0, {}
-        
-        df_h1 = pd.DataFrame(rates_h1)
-        df_h1['time'] = pd.to_datetime(df_h1['time'], unit='s')
-        
-        # 1. Detect market regime
-        regime = self.regime_detector.detect_regime(df_m5)
-        
-        # 2. Detect support/resistance levels
-        sr_levels = self.sr_detector.detect_levels(df_m5)
-        
-        # 3. Analyze based on regime
-        if regime == 'trending':
-            action, confidence, details = self._trending_strategy(df_m5, df_h1, sr_levels, symbol)
-        elif regime == 'ranging':
-            action, confidence, details = self._ranging_strategy(df_m5, df_h1, sr_levels, symbol)
-        else:  # volatile
-            # Don't trade in highly volatile conditions
-            return None, 0, {'regime': regime, 'reason': 'Too volatile'}
-        
-        if action and details:
-            details['regime'] = regime
-            details['support_levels'] = sr_levels['support']
-            details['resistance_levels'] = sr_levels['resistance']
-        
-        return action, confidence, details
+        try:
+            # Get M5 data (primary timeframe)
+            rates_m5 = mt5.copy_rates_from_pos(symbol, timeframe, 0, 200)
+            if rates_m5 is None or len(rates_m5) < 100:
+                return None, 0, {'reason': f'Insufficient M5 data for {symbol}'}
+            
+            df_m5 = pd.DataFrame(rates_m5)
+            df_m5['time'] = pd.to_datetime(df_m5['time'], unit='s')
+            
+            # Get H1 data (higher timeframe for trend confirmation)
+            rates_h1 = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 100)
+            if rates_h1 is None or len(rates_h1) < 50:
+                return None, 0, {'reason': f'Insufficient H1 data for {symbol}'}
+            
+            df_h1 = pd.DataFrame(rates_h1)
+            df_h1['time'] = pd.to_datetime(df_h1['time'], unit='s')
+            
+            # 1. Detect market regime
+            regime = self.regime_detector.detect_regime(df_m5)
+            
+            # 2. Detect support/resistance levels
+            sr_levels = self.sr_detector.detect_levels(df_m5)
+            
+            # 3. Analyze based on regime
+            if regime == 'trending':
+                action, confidence, details = self._trending_strategy(df_m5, df_h1, sr_levels, symbol)
+            elif regime == 'ranging':
+                action, confidence, details = self._ranging_strategy(df_m5, df_h1, sr_levels, symbol)
+            else:  # volatile
+                # Don't trade in highly volatile conditions
+                return None, 0, {'regime': regime, 'reason': 'Too volatile', 'strategy': 'NONE'}
+            
+            if action and details:
+                details['regime'] = regime
+                details['support_levels'] = sr_levels['support']
+                details['resistance_levels'] = sr_levels['resistance']
+            elif not action and not details:
+                # No signal but return regime info
+                details = {'regime': regime, 'reason': 'No setup', 'strategy': 'NONE'}
+            
+            return action, confidence, details
+            
+        except Exception as e:
+            import traceback
+            error_msg = f"Error analyzing {symbol}: {str(e)}"
+            print(f"❌ {error_msg}")
+            print(traceback.format_exc())
+            return None, 0, {'error': error_msg, 'reason': 'Analysis failed'}
     
     def _trending_strategy(self, df_m5: pd.DataFrame, df_h1: pd.DataFrame, 
                           sr_levels: Dict, symbol: str) -> Tuple[Optional[str], float, Dict]:
@@ -345,7 +356,8 @@ class AdvancedScalpingEngine:
             
             return action, confidence, details
         
-        return None, 0, {}
+        # No signal - return reason
+        return None, 0, {'reason': 'Waiting for EMA crossover', 'strategy': 'TRENDING_EMA_RSI'}
     
     def _ranging_strategy(self, df_m5: pd.DataFrame, df_h1: pd.DataFrame,
                          sr_levels: Dict, symbol: str) -> Tuple[Optional[str], float, Dict]:
@@ -431,7 +443,8 @@ class AdvancedScalpingEngine:
             
             return action, confidence, details
         
-        return None, 0, {}
+        # No signal - return reason
+        return None, 0, {'reason': 'Waiting for BB touch', 'strategy': 'RANGING_BB_REVERSION'}
     
     def _detect_divergence(self, df: pd.DataFrame, rsi: pd.Series) -> Optional[str]:
         """
